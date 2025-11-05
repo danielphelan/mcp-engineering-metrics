@@ -6,12 +6,14 @@
  */
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
   Tool,
 } from '@modelcontextprotocol/sdk/types.js';
+import express, { Request, Response, NextFunction } from 'express';
+import cors from 'cors';
 import { IJiraService } from '../../domain/interfaces/IJiraService.js';
 import { IGitHubService } from '../../domain/interfaces/IGitHubService.js';
 import { ISecurityService } from '../../domain/interfaces/ISecurityService.js';
@@ -433,9 +435,65 @@ export class MCPServer {
     };
   }
 
-  async start(): Promise<void> {
-    const transport = new StdioServerTransport();
-    await this.server.connect(transport);
-    this.logger.info('MCP Server started successfully');
+  async start(port: number, host: string, corsOrigins?: string[]): Promise<void> {
+    const app = express();
+
+    // Configure CORS
+    const corsOptions = {
+      origin: corsOrigins && corsOrigins.length > 0 ? corsOrigins : '*',
+      credentials: true,
+    };
+    app.use(cors(corsOptions));
+
+    // Parse JSON bodies
+    app.use(express.json());
+
+    // Health check endpoint
+    app.get('/health', (_req: Request, res: Response) => {
+      res.json({ status: 'healthy', timestamp: new Date().toISOString() });
+    });
+
+    // MCP SSE endpoint
+    app.get('/sse', async (req: Request, res: Response) => {
+      this.logger.info('New SSE connection established');
+
+      const transport = new SSEServerTransport('/message', res);
+      await this.server.connect(transport);
+
+      // Handle client disconnect
+      req.on('close', () => {
+        this.logger.info('SSE connection closed');
+      });
+    });
+
+    // MCP message endpoint
+    app.post('/message', async (_req: Request, res: Response) => {
+      // This endpoint is used by the SSE transport to receive messages
+      res.status(200).end();
+    });
+
+    // Error handling middleware
+    app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
+      this.logger.error('HTTP server error', err);
+      res.status(500).json({
+        error: 'Internal server error',
+        message: err.message,
+      });
+    });
+
+    // Start HTTP server
+    return new Promise((resolve) => {
+      app.listen(port, host, () => {
+        this.logger.info('MCP HTTP Server started', {
+          port,
+          host,
+          endpoints: {
+            health: `http://${host}:${port}/health`,
+            sse: `http://${host}:${port}/sse`,
+          },
+        });
+        resolve();
+      });
+    });
   }
 }

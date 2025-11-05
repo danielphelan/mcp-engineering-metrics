@@ -76,9 +76,18 @@ async function main() {
       reportService,
       logger
     );
-    await mcpServer.start();
 
-    logger.info('MCP Server is ready to accept requests');
+    // Parse CORS origins
+    const corsOrigins = config.server.corsOrigins
+      ? config.server.corsOrigins.split(',').map((origin) => origin.trim())
+      : undefined;
+
+    await mcpServer.start(config.server.port, config.server.host, corsOrigins);
+
+    logger.info('MCP Server is ready to accept HTTP requests', {
+      port: config.server.port,
+      host: config.server.host,
+    });
 
     // Handle graceful shutdown
     process.on('SIGINT', () => {

@@ -31,6 +31,9 @@ const ConfigSchema = z.object({
   server: z.object({
     nodeEnv: z.enum(['development', 'production', 'test']).default('development'),
     logLevel: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
+    port: z.number().int().min(1).max(65535).default(3000),
+    host: z.string().default('0.0.0.0'),
+    corsOrigins: z.string().optional(), // Comma-separated list of allowed origins
   }),
 });
 
@@ -57,6 +60,9 @@ export class Config {
           server: {
             nodeEnv: process.env.NODE_ENV,
             logLevel: process.env.LOG_LEVEL,
+            port: process.env.PORT ? parseInt(process.env.PORT, 10) : undefined,
+            host: process.env.HOST,
+            corsOrigins: process.env.CORS_ORIGINS,
           },
         });
       } catch (error) {

@@ -29,10 +29,14 @@
     "@modelcontextprotocol/sdk": "^1.0.4",
     "@octokit/rest": "^21.0.2",
     "axios": "^1.7.9",
+    "cors": "^2.8.5",
     "dotenv": "^16.4.5",
+    "express": "^4.21.2",
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
     "@types/node": "^22.10.1",
     "@typescript-eslint/eslint-plugin": "^8.18.1",
     "@typescript-eslint/parser": "^8.18.1",
