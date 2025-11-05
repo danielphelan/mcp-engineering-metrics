@@ -4,6 +4,13 @@
  * Main MCP server that exposes engineering metrics tools via streamable HTTP transport.
  * Follows Dependency Injection and Single Responsibility Principles.
  * Implements MCP Specification 2025-03-26 with streamable HTTP transport.
+ *
+ * This class is now focused solely on:
+ * - HTTP transport management
+ * - Session lifecycle management
+ * - MCP protocol handling
+ *
+ * Tool definitions are managed in src/application/tools/
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -12,15 +19,13 @@ import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import { randomUUID } from 'node:crypto';
-import { z } from 'zod';
 
 import { IJiraService } from '../../domain/interfaces/IJiraService.js';
 import { IGitHubService } from '../../domain/interfaces/IGitHubService.js';
 import { ISecurityService } from '../../domain/interfaces/ISecurityService.js';
 import { IReportService } from '../../domain/interfaces/IReportService.js';
 import { ILogger } from '../../domain/interfaces/ILogger.js';
-import { QuarterLabel } from '../../domain/value-objects/QuarterLabel.js';
-import { DateRange } from '../../domain/value-objects/DateRange.js';
+import { createTools } from '../../application/tools/index.js';
 
 /**
  * Storage for active transports by session ID
@@ -42,6 +47,9 @@ export class MCPServer {
 
   /**
    * Create and configure MCP server instance with all tools
+   *
+   * Tools are defined in src/application/tools/ following SOLID principles.
+   * This method simply creates the server and registers all tools from the registry.
    */
   private createServer(): McpServer {
     const server = new McpServer(
@@ -56,141 +64,23 @@ export class MCPServer {
       }
     );
 
-    // Register tool: get_story_points
-    server.tool(
-      'get_story_points',
-      'Query JIRA for story points with quarterly label. Returns breakdown by status (Done, In Progress, To Do).',
-      {
-        quarter: z.string().describe('Quarter label (e.g., "2025-Q1" or "2025-Q1-PI")'),
-        week_start: z.string().optional().describe('Optional: ISO date for specific week start (YYYY-MM-DD)'),
-        week_end: z.string().optional().describe('Optional: ISO date for specific week end (YYYY-MM-DD)'),
-      },
-      async ({ quarter, week_start, week_end }) => {
-        const quarterLabel = QuarterLabel.fromString(quarter);
-        let period: DateRange | undefined;
-        if (week_start && week_end) {
-          period = DateRange.fromISOStrings(week_start, week_end);
-        }
-        const metrics = await this.jiraService.getStoryPoints(quarterLabel, period);
-        return {
-          content: [{ type: 'text', text: JSON.stringify(metrics.toJSON(), null, 2) }],
-        };
-      }
+    // Create all tools with injected dependencies
+    const tools = createTools(
+      this.jiraService,
+      this.githubService,
+      this.securityService,
+      this.reportService
     );
 
-    // Register tool: get_pr_metrics
-    server.tool(
-      'get_pr_metrics',
-      'Retrieve GitHub pull request statistics including created count, merged count, and merge rate.',
-      {
-        start_date: z.string().describe('Start date in ISO format (YYYY-MM-DD)'),
-        end_date: z.string().describe('End date in ISO format (YYYY-MM-DD)'),
-        repositories: z.array(z.string()).optional().describe('Optional: List of repository names to filter'),
-      },
-      async ({ start_date, end_date, repositories }) => {
-        const period = DateRange.fromISOStrings(start_date, end_date);
-        const metrics = await this.githubService.getPullRequestMetrics(period, repositories);
-        return {
-          content: [{ type: 'text', text: JSON.stringify(metrics.toJSON(), null, 2) }],
-        };
-      }
-    );
+    // Register all tools with the MCP server
+    for (const tool of tools) {
+      this.logger.debug('Registering MCP tool', { name: tool.name });
+      // Extract the shape from ZodObject for MCP SDK compatibility
+      const schemaShape = 'shape' in tool.schema ? (tool.schema as any).shape : tool.schema;
+      server.tool(tool.name, tool.description, schemaShape, tool.handler.bind(tool));
+    }
 
-    // Register tool: get_deployment_count
-    server.tool(
-      'get_deployment_count',
-      'Count JIRA releases deployed within a time period. Returns release names, projects, and dates.',
-      {
-        start_date: z.string().describe('Start date in ISO format (YYYY-MM-DD)'),
-        end_date: z.string().describe('End date in ISO format (YYYY-MM-DD)'),
-        projects: z.array(z.string()).optional().describe('Optional: List of JIRA project keys to filter'),
-      },
-      async ({ start_date, end_date, projects }) => {
-        const period = DateRange.fromISOStrings(start_date, end_date);
-        const metrics = await this.jiraService.getDeployments(period, projects);
-        return {
-          content: [{ type: 'text', text: JSON.stringify(metrics.toJSON(), null, 2) }],
-        };
-      }
-    );
-
-    // Register tool: get_bug_ratio
-    server.tool(
-      'get_bug_ratio',
-      'Calculate defect rate from JIRA. Counts bugs and defect sub-tasks against total tickets created.',
-      {
-        start_date: z.string().describe('Start date in ISO format (YYYY-MM-DD)'),
-        end_date: z.string().describe('End date in ISO format (YYYY-MM-DD)'),
-        projects: z.array(z.string()).optional().describe('Optional: List of JIRA project keys to filter'),
-      },
-      async ({ start_date, end_date, projects }) => {
-        const period = DateRange.fromISOStrings(start_date, end_date);
-        const metrics = await this.jiraService.getBugMetrics(period, projects);
-        return {
-          content: [{ type: 'text', text: JSON.stringify(metrics.toJSON(), null, 2) }],
-        };
-      }
-    );
-
-    // Register tool: get_ghas_metrics
-    server.tool(
-      'get_ghas_metrics',
-      'Retrieve GitHub Advanced Security metrics including critical/high vulnerabilities and secrets detected.',
-      {
-        repositories: z.array(z.string()).optional().describe('Optional: List of repository names to filter'),
-        state: z.enum(['open', 'resolved']).optional().default('open').describe('Filter by alert state (default: "open")'),
-      },
-      async ({ repositories, state }) => {
-        const metrics = await this.securityService.getSecurityMetrics(repositories, state);
-        return {
-          content: [{ type: 'text', text: JSON.stringify(metrics.toJSON(), null, 2) }],
-        };
-      }
-    );
-
-    // Register tool: generate_weekly_report
-    server.tool(
-      'generate_weekly_report',
-      'Generate comprehensive markdown report for a week with all metrics and week-over-week comparison.',
-      {
-        week_start: z.string().optional().describe('Optional: ISO date for week start (YYYY-MM-DD). Defaults to most recent Monday.'),
-        quarter: z.string().describe('Quarter label (e.g., "2025-Q1" or "2025-Q1-PI")'),
-        repositories: z.array(z.string()).optional().describe('Optional: List of repository names'),
-        jira_projects: z.array(z.string()).optional().describe('Optional: List of JIRA project keys'),
-      },
-      async ({ week_start, quarter, repositories, jira_projects }) => {
-        const report = await this.reportService.generateWeeklyReport({
-          weekStart: week_start ? new Date(week_start) : undefined,
-          quarter: QuarterLabel.fromString(quarter),
-          repositories,
-          jiraProjects: jira_projects,
-        });
-        return {
-          content: [{ type: 'text', text: report }],
-        };
-      }
-    );
-
-    // Register tool: generate_quarterly_summary
-    server.tool(
-      'generate_quarterly_summary',
-      'Generate quarter-to-date summary with weekly trend tables showing progress over time.',
-      {
-        quarter: z.string().describe('Quarter label (e.g., "2025-Q1" or "2025-Q1-PI")'),
-        repositories: z.array(z.string()).optional().describe('Optional: List of repository names'),
-        jira_projects: z.array(z.string()).optional().describe('Optional: List of JIRA project keys'),
-      },
-      async ({ quarter, repositories, jira_projects }) => {
-        const report = await this.reportService.generateQuarterlyReport({
-          quarter: QuarterLabel.fromString(quarter),
-          repositories,
-          jiraProjects: jira_projects,
-        });
-        return {
-          content: [{ type: 'text', text: report }],
-        };
-      }
-    );
+    this.logger.info('MCP tools registered', { count: tools.length });
 
     return server;
   }
