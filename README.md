@@ -187,6 +187,54 @@ For development with environment variables:
 }
 ```
 
+## Logging
+
+This server uses **Pino** for production-ready structured logging, optimized for Docker, Azure, and other log aggregation systems.
+
+### Features
+- **Structured JSON logging** - Perfect for log aggregators (Azure, CloudWatch, Datadog)
+- **High performance** - 5-10x faster than alternatives, non-blocking async I/O
+- **Automatic redaction** - Passwords, tokens, and API keys never appear in logs
+- **Pretty printing** - Human-readable format in development mode
+- **Request correlation** - Child loggers for tracing requests across logs
+
+### Configuration
+
+**Log Levels** (via `LOG_LEVEL` env var):
+```bash
+LOG_LEVEL=debug  # Show all logs (debug, info, warn, error)
+LOG_LEVEL=info   # Show info, warn, error (default)
+LOG_LEVEL=warn   # Show warnings and errors only
+LOG_LEVEL=error  # Show errors only
+```
+
+**Output Format** (via `NODE_ENV` env var):
+```bash
+NODE_ENV=development  # Pretty formatted logs for humans
+NODE_ENV=production   # JSON structured logs for aggregators
+```
+
+### Example Output
+
+**Development mode:**
+```
+[10:30:45] INFO  (12345): Starting MCP Engineering Metrics Server
+    version: "1.0.0"
+    environment: "development"
+```
+
+**Production mode (JSON for log aggregators):**
+```json
+{"level":"info","time":"2025-11-05T10:30:45.123Z","msg":"Starting MCP Engineering Metrics Server","version":"1.0.0","environment":"production"}
+```
+
+**See [LOGGING.md](./LOGGING.md) for detailed documentation** including:
+- Docker integration
+- Azure Log Analytics queries
+- CloudWatch Insights examples
+- Request correlation with child loggers
+- Best practices
+
 ## Available Tools
 
 ### 1. `get_story_points`

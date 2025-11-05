@@ -13,7 +13,7 @@ import { GitHubService } from './application/services/GitHubService.js';
 import { SecurityService } from './application/services/SecurityService.js';
 import { ReportService } from './application/services/ReportService.js';
 import { AxiosHttpClient } from './infrastructure/http/AxiosHttpClient.js';
-import { ConsoleLogger } from './infrastructure/http/ConsoleLogger.js';
+import { PinoLogger } from './infrastructure/http/PinoLogger.js';
 import { Config } from './infrastructure/config/Config.js';
 import { LogLevel } from './domain/interfaces/ILogger.js';
 
@@ -22,8 +22,8 @@ async function main() {
     // Load configuration
     const config = Config.load();
 
-    // Create logger
-    const logger = new ConsoleLogger(config.server.logLevel as LogLevel);
+    // Create logger (Pino for production-ready structured logging)
+    const logger = new PinoLogger(config.server.logLevel as LogLevel, config.server.nodeEnv);
 
     logger.info('Starting MCP Engineering Metrics Server', {
       version: '1.0.0',
