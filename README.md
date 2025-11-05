@@ -1,17 +1,29 @@
 # MCP Engineering Metrics Server
 
-A Model Context Protocol (MCP) server providing weather and maritime vessel tracking capabilities. Built with TypeScript following Domain-Driven Design (DDD) principles and SOLID best practices.
+A Model Context Protocol (MCP) server for aggregating and reporting engineering metrics from JIRA, GitHub, and GitHub Advanced Security. Built with TypeScript following Domain-Driven Design (DDD) principles and SOLID best practices.
+
+Implements **MCP Specification 2025-03-26** with streamable HTTP transport.
 
 ## Features
 
-### Weather Tools
-- **Current Weather**: Get real-time weather data for any location
-- **Weather Forecast**: Get multi-day weather forecasts
+### 📊 JIRA Metrics
+- **Story Points Tracking**: Query story points by quarterly label with status breakdown
+- **Deployment Frequency**: Track JIRA releases and deployment cadence
+- **Defect Rate Analysis**: Calculate bug ratios and quality metrics
 
-### Maritime Tools
-- **Vessel Lookup**: Find vessel information by MMSI number
-- **Area Search**: Get all vessels within a geographic bounding box
-- **Proximity Search**: Find vessels near a specific location
+### 💻 GitHub Metrics
+- **Pull Request Analytics**: Track PR creation, merges, and merge rates
+- **Repository Insights**: Multi-repository support with filtering
+
+### 🔒 Security Metrics (GHAS)
+- **Vulnerability Tracking**: Critical and high severity alerts
+- **Secret Detection**: Identify exposed credentials and tokens
+- **Security Posture**: Real-time security status across repositories
+
+### 📈 Reporting
+- **Weekly Reports**: Comprehensive markdown reports with week-over-week trends
+- **Quarterly Summaries**: Quarter-to-date progress with weekly breakdowns
+- **Customizable Periods**: Flexible date range queries
 
 ## Architecture
 
@@ -19,63 +31,70 @@ This project follows Domain-Driven Design with a clean architecture approach:
 
 ```
 src/
-├── domain/                  # Core business logic (framework-independent)
-│   ├── interfaces/          # Abstractions (SOLID - Dependency Inversion)
-│   │   ├── IWeatherService.ts
-│   │   ├── IMaritimeService.ts
+├── domain/                     # Core business logic (framework-independent)
+│   ├── interfaces/             # Abstractions (SOLID - Dependency Inversion)
+│   │   ├── IJiraService.ts
+│   │   ├── IGitHubService.ts
+│   │   ├── ISecurityService.ts
+│   │   ├── IReportService.ts
 │   │   ├── IHttpClient.ts
 │   │   └── ILogger.ts
-│   ├── models/              # Domain entities
-│   │   ├── WeatherData.ts
-│   │   └── VesselData.ts
-│   └── value-objects/       # Immutable domain objects
-│       ├── Coordinates.ts
-│       └── BoundingBox.ts
-├── application/             # Application business rules
-│   └── services/            # Service implementations
-│       ├── OpenWeatherService.ts
-│       └── MaritimeService.ts
-└── infrastructure/          # External concerns & implementations
+│   ├── models/                 # Domain entities
+│   │   ├── StoryPointsMetrics.ts
+│   │   ├── PullRequestMetrics.ts
+│   │   ├── DeploymentMetrics.ts
+│   │   ├── BugMetrics.ts
+│   │   └── SecurityMetrics.ts
+│   └── value-objects/          # Immutable domain objects
+│       ├── DateRange.ts
+│       ├── QuarterLabel.ts
+│       └── MetricTrend.ts
+├── application/                # Application business rules
+│   └── services/               # Service implementations
+│       ├── JiraService.ts
+│       ├── GitHubService.ts
+│       ├── SecurityService.ts
+│       └── ReportService.ts
+└── infrastructure/             # External concerns & implementations
     ├── http/
     │   ├── AxiosHttpClient.ts
     │   └── ConsoleLogger.ts
     ├── config/
     │   └── Config.ts
     └── mcp/
-        └── MCPServer.ts
+        └── MCPServer.ts        # Streamable HTTP transport
 ```
 
 ### SOLID Principles Applied
 
 1. **Single Responsibility Principle (SRP)**
-   - Each class has one reason to change
-   - Services handle only their specific domain (weather or maritime)
+   - Each service handles one domain (JIRA, GitHub, Security, Reports)
    - Logger handles only logging concerns
+   - Config handles only configuration management
 
 2. **Open/Closed Principle (OCP)**
    - Services are open for extension through interfaces
-   - Closed for modification - new features through new implementations
+   - New metric sources can be added without modifying existing code
 
 3. **Liskov Substitution Principle (LSP)**
    - Any `IHttpClient` implementation can replace `AxiosHttpClient`
    - Service interfaces can be swapped without breaking consumers
 
 4. **Interface Segregation Principle (ISP)**
-   - Focused interfaces (IWeatherService, IMaritimeService)
+   - Focused interfaces (IJiraService, IGitHubService, etc.)
    - No client depends on methods it doesn't use
 
 5. **Dependency Inversion Principle (DIP)**
-   - High-level modules (services) depend on abstractions (interfaces)
-   - Low-level modules (HTTP client) depend on abstractions
+   - High-level modules (services) depend on abstractions
    - Dependency injection in the composition root (index.ts)
 
 ## Prerequisites
 
 - Node.js >= 18.0.0
 - npm or yarn
-- API keys for:
-  - [OpenWeather API](https://openweathermap.org/api)
-  - [AIS Hub API](https://www.aishub.net/) (or similar maritime data provider)
+- API credentials:
+  - [JIRA API Token](https://support.atlassian.com/atlassian-account/docs/manage-api-tokens-for-your-atlassian-account/)
+  - [GitHub Personal Access Token](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens)
 
 ## Installation
 
@@ -95,15 +114,341 @@ npm install
 cp .env.example .env
 ```
 
-4. Edit `.env` and add your API keys:
+4. Edit `.env` and add your credentials:
 ```env
-OPENWEATHER_API_KEY=your_openweather_api_key
-MARITIME_API_KEY=your_maritime_api_key
+# JIRA Configuration
+JIRA_URL=https://your-domain.atlassian.net
+JIRA_EMAIL=your-email@company.com
+JIRA_API_TOKEN=your_jira_api_token
+
+# GitHub Configuration
+GITHUB_TOKEN=ghp_your_github_token
+GITHUB_ORG=your-organization-name
+
+# Optional: Specific repositories (comma-separated)
+GITHUB_REPOS=backend-api,frontend-app
+
+# Optional: Specific JIRA projects (comma-separated)
+JIRA_PROJECTS=PROJ1,PROJ2
+
+# Server Configuration
+PORT=3000
+HOST=0.0.0.0
+LOG_LEVEL=info
 ```
 
 5. Build the project:
 ```bash
 npm run build
+```
+
+## Usage
+
+### Starting the Server
+
+```bash
+npm start
+```
+
+The server will start on `http://localhost:3000` (or your configured PORT).
+
+### MCP Client Configuration
+
+Add this server to your MCP client configuration (e.g., Claude Desktop):
+
+```json
+{
+  "mcpServers": {
+    "engineering-metrics": {
+      "url": "http://localhost:3000/mcp",
+      "transport": "streamableHttp"
+    }
+  }
+}
+```
+
+For development with environment variables:
+
+```json
+{
+  "mcpServers": {
+    "engineering-metrics": {
+      "command": "node",
+      "args": ["/path/to/mcp-engineering-metrics/dist/index.js"],
+      "env": {
+        "JIRA_URL": "https://your-domain.atlassian.net",
+        "JIRA_EMAIL": "your-email@company.com",
+        "JIRA_API_TOKEN": "your_token",
+        "GITHUB_TOKEN": "ghp_your_token",
+        "GITHUB_ORG": "your-org"
+      }
+    }
+  }
+}
+```
+
+## Available Tools
+
+### 1. `get_story_points`
+
+Query JIRA for story points with quarterly label.
+
+**Parameters:**
+- `quarter` (required): Quarter label (e.g., "2025-Q1" or "2025-Q1-PI")
+- `week_start` (optional): ISO date for specific week start (YYYY-MM-DD)
+- `week_end` (optional): ISO date for specific week end (YYYY-MM-DD)
+
+**Example:**
+```json
+{
+  "quarter": "2025-Q1",
+  "week_start": "2025-01-13",
+  "week_end": "2025-01-19"
+}
+```
+
+**Returns:**
+```json
+{
+  "total_points": 45,
+  "label": "2025-Q1-PI",
+  "period": "2025-01-13 to 2025-01-19",
+  "breakdown": {
+    "done": 30,
+    "in_progress": 10,
+    "to_do": 5
+  },
+  "completion_percentage": 66.7
+}
+```
+
+### 2. `get_pr_metrics`
+
+Retrieve GitHub pull request statistics.
+
+**Parameters:**
+- `start_date` (required): ISO date (YYYY-MM-DD)
+- `end_date` (required): ISO date (YYYY-MM-DD)
+- `repositories` (optional): List of repository names
+
+**Example:**
+```json
+{
+  "start_date": "2025-01-13",
+  "end_date": "2025-01-19",
+  "repositories": ["backend-api", "frontend-app"]
+}
+```
+
+**Returns:**
+```json
+{
+  "created": 24,
+  "merged": 20,
+  "merge_rate": 83.3,
+  "period": "2025-01-13 to 2025-01-19",
+  "repositories": ["backend-api", "frontend-app"]
+}
+```
+
+### 3. `get_deployment_count`
+
+Count JIRA releases deployed within a time period.
+
+**Parameters:**
+- `start_date` (required): ISO date (YYYY-MM-DD)
+- `end_date` (required): ISO date (YYYY-MM-DD)
+- `projects` (optional): List of JIRA project keys
+
+**Example:**
+```json
+{
+  "start_date": "2025-01-13",
+  "end_date": "2025-01-19",
+  "projects": ["PROJ1", "PROJ2"]
+}
+```
+
+**Returns:**
+```json
+{
+  "total_deployments": 3,
+  "period": "2025-01-13 to 2025-01-19",
+  "releases": [
+    {"name": "v2.4.0", "project": "PROJ1", "date": "2025-01-15"},
+    {"name": "v1.2.3", "project": "PROJ2", "date": "2025-01-17"}
+  ],
+  "frequency_per_week": 3.0
+}
+```
+
+### 4. `get_bug_ratio`
+
+Calculate defect rate from JIRA.
+
+**Parameters:**
+- `start_date` (required): ISO date (YYYY-MM-DD)
+- `end_date` (required): ISO date (YYYY-MM-DD)
+- `projects` (optional): List of JIRA project keys
+
+**Example:**
+```json
+{
+  "start_date": "2025-01-13",
+  "end_date": "2025-01-19"
+}
+```
+
+**Returns:**
+```json
+{
+  "bugs": 5,
+  "defect_subtasks": 3,
+  "total_defects": 8,
+  "total_tickets": 52,
+  "defect_rate": 15.4,
+  "period": "2025-01-13 to 2025-01-19"
+}
+```
+
+### 5. `get_ghas_metrics`
+
+Retrieve GitHub Advanced Security metrics.
+
+**Parameters:**
+- `repositories` (optional): List of repository names
+- `state` (optional): "open" or "resolved" (default: "open")
+
+**Example:**
+```json
+{
+  "repositories": ["backend-api"],
+  "state": "open"
+}
+```
+
+**Returns:**
+```json
+{
+  "critical_vulnerabilities": 2,
+  "high_vulnerabilities": 7,
+  "secrets_detected": 1,
+  "total_critical_and_high": 9,
+  "timestamp": "2025-01-19T10:30:00Z",
+  "repositories": ["backend-api"]
+}
+```
+
+### 6. `generate_weekly_report`
+
+Generate comprehensive markdown report for a week with week-over-week comparison.
+
+**Parameters:**
+- `quarter` (required): Quarter label (e.g., "2025-Q1")
+- `week_start` (optional): ISO date (defaults to most recent Monday)
+- `repositories` (optional): List of repository names
+- `jira_projects` (optional): List of JIRA project keys
+
+**Example:**
+```json
+{
+  "quarter": "2025-Q1",
+  "week_start": "2025-01-13"
+}
+```
+
+**Returns:** Markdown report with:
+- Story points breakdown
+- PR metrics
+- Deployments
+- Bug ratio
+- Security metrics
+- Week-over-week comparison table
+
+### 7. `generate_quarterly_summary`
+
+Generate quarter-to-date summary with weekly trend tables.
+
+**Parameters:**
+- `quarter` (required): Quarter label (e.g., "2025-Q1")
+- `repositories` (optional): List of repository names
+- `jira_projects` (optional): List of JIRA project keys
+
+**Example:**
+```json
+{
+  "quarter": "2025-Q1"
+}
+```
+
+**Returns:** Markdown report with:
+- Quarter-to-date totals
+- Weekly trends for all metrics
+- Key insights and averages
+
+## HTTP Endpoints
+
+The server implements streamable HTTP transport per MCP specification 2025-03-26:
+
+### POST /mcp
+Primary MCP endpoint for JSON-RPC requests.
+
+**First Request (Initialize):**
+```bash
+curl -X POST http://localhost:3000/mcp \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "initialize",
+    "params": {
+      "protocolVersion": "2024-11-05",
+      "capabilities": {},
+      "clientInfo": {"name": "test-client", "version": "1.0.0"}
+    },
+    "id": 1
+  }'
+```
+
+Response includes `Mcp-Session-Id` header.
+
+**Subsequent Requests:**
+```bash
+curl -X POST http://localhost:3000/mcp \
+  -H "Content-Type: application/json" \
+  -H "Mcp-Session-Id: <session-id>" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "tools/call",
+    "params": {
+      "name": "get_ghas_metrics",
+      "arguments": {"state": "open"}
+    },
+    "id": 2
+  }'
+```
+
+### GET /mcp
+SSE stream for resumability (requires `Mcp-Session-Id` header).
+
+Supports `Last-Event-ID` header for connection recovery.
+
+### DELETE /mcp
+Session termination (requires `Mcp-Session-Id` header).
+
+### GET /health
+Health check endpoint.
+
+```bash
+curl http://localhost:3000/health
+```
+
+Returns:
+```json
+{
+  "status": "healthy",
+  "timestamp": "2025-01-19T12:00:00.000Z",
+  "activeSessions": 3
+}
 ```
 
 ## Development
@@ -127,169 +472,45 @@ npm run dev
 npm start
 ```
 
-## MCP Configuration
-
-Add this server to your MCP client configuration (e.g., Claude Desktop):
-
-```json
-{
-  "mcpServers": {
-    "mcp-engineering-metrics": {
-      "command": "node",
-      "args": ["/path/to/mcp-engineering-metrics/dist/index.js"],
-      "env": {
-        "OPENWEATHER_API_KEY": "your_key",
-        "MARITIME_API_KEY": "your_key"
-      }
-    }
-  }
-}
-```
-
-## Available Tools
-
-### 1. get_current_weather
-
-Get current weather data for a location.
-
-**Parameters:**
-- `location` (string): City name (e.g., "London") or coordinates (e.g., "51.5074,-0.1278")
-
-**Example:**
-```json
-{
-  "location": "London"
-}
-```
-
-### 2. get_weather_forecast
-
-Get weather forecast for multiple days.
-
-**Parameters:**
-- `location` (string): City name or coordinates
-- `days` (number, optional): Number of forecast days (default: 5, max: 5)
-
-**Example:**
-```json
-{
-  "location": "New York",
-  "days": 3
-}
-```
-
-### 3. get_vessel_by_mmsi
-
-Get vessel information by MMSI number.
-
-**Parameters:**
-- `mmsi` (string): 9-digit MMSI number
-
-**Example:**
-```json
-{
-  "mmsi": "123456789"
-}
-```
-
-### 4. get_vessels_in_area
-
-Get all vessels within a geographic bounding box.
-
-**Parameters:**
-- `northLat` (number): Northern boundary latitude
-- `westLon` (number): Western boundary longitude
-- `southLat` (number): Southern boundary latitude
-- `eastLon` (number): Eastern boundary longitude
-
-**Example:**
-```json
-{
-  "northLat": 52.0,
-  "westLon": -1.0,
-  "southLat": 51.0,
-  "eastLon": 0.0
-}
-```
-
-### 5. get_vessels_nearby
-
-Get vessels near a specific location.
-
-**Parameters:**
-- `latitude` (number): Center point latitude
-- `longitude` (number): Center point longitude
-- `radiusKm` (number): Search radius in kilometers
-
-**Example:**
-```json
-{
-  "latitude": 51.5074,
-  "longitude": -0.1278,
-  "radiusKm": 50
-}
-```
-
-## Project Structure Details
-
-### Domain Layer
-The domain layer contains the core business logic and is framework-independent:
-
-- **Interfaces**: Define contracts for services and infrastructure
-- **Models**: Represent business entities (WeatherData, VesselData)
-- **Value Objects**: Immutable objects representing domain concepts (Coordinates, BoundingBox)
-
-### Application Layer
-Application services coordinate domain objects and implement use cases:
-
-- **OpenWeatherService**: Weather data retrieval from OpenWeather API
-- **MaritimeService**: Vessel tracking from AIS data providers
-
-### Infrastructure Layer
-External concerns and implementations:
-
-- **HTTP Client**: Axios-based HTTP client with logging
-- **Logger**: Console-based logging implementation
-- **Configuration**: Environment-based configuration with validation
-- **MCP Server**: Model Context Protocol server implementation
-
 ## Configuration Options
 
 ### Environment Variables
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `OPENWEATHER_API_KEY` | Yes | - | OpenWeather API key |
-| `OPENWEATHER_BASE_URL` | No | `https://api.openweathermap.org/data/2.5` | OpenWeather API base URL |
-| `MARITIME_API_KEY` | Yes | - | Maritime/AIS Hub API key |
-| `MARITIME_BASE_URL` | No | `https://www.aishub.net/api` | Maritime API base URL |
-| `NODE_ENV` | No | `development` | Environment (development/production/test) |
-| `LOG_LEVEL` | No | `info` | Logging level (debug/info/warn/error) |
+| `JIRA_URL` | Yes | - | JIRA instance URL |
+| `JIRA_EMAIL` | Yes | - | JIRA user email |
+| `JIRA_API_TOKEN` | Yes | - | JIRA API token |
+| `JIRA_PROJECTS` | No | All | Comma-separated JIRA project keys |
+| `GITHUB_TOKEN` | Yes | - | GitHub personal access token |
+| `GITHUB_ORG` | Yes | - | GitHub organization name |
+| `GITHUB_REPOS` | No | All | Comma-separated repository names |
+| `PORT` | No | 3000 | HTTP server port |
+| `HOST` | No | 0.0.0.0 | Bind address |
+| `NODE_ENV` | No | development | Environment (development/production/test) |
+| `LOG_LEVEL` | No | info | Logging level (debug/info/warn/error) |
+| `CORS_ORIGINS` | No | * | Comma-separated allowed CORS origins |
+
+### Quarterly Label Format
+
+Story points use quarterly labels in the format: `YYYY-QX-PI`
+
+Examples:
+- `2025-Q1-PI` - Q1 2025
+- `2025-Q2-PI` - Q2 2025
+- `2026-Q3-PI` - Q3 2026
+
+Create these labels in JIRA and apply them to issues for tracking.
 
 ## Error Handling
 
 The server implements comprehensive error handling:
 
-- Invalid coordinates are rejected with validation errors
+- Invalid parameters are rejected with validation errors
 - API errors are logged and returned with meaningful messages
 - Configuration errors are caught at startup
 - All service errors are properly propagated
-
-## Extending the Server
-
-### Adding a New Service
-
-1. **Define the interface** in `src/domain/interfaces/`
-2. **Create domain models** in `src/domain/models/`
-3. **Implement the service** in `src/application/services/`
-4. **Register in MCP server** in `src/infrastructure/mcp/MCPServer.ts`
-5. **Wire up dependencies** in `src/index.ts`
-
-### Adding a New Tool
-
-1. **Add tool definition** in `MCPServer.getToolDefinitions()`
-2. **Add handler method** in `MCPServer` (e.g., `handleNewTool()`)
-3. **Add case to switch statement** in `CallToolRequestSchema` handler
+- JSON-RPC 2.0 error responses for protocol violations
 
 ## Best Practices
 
@@ -303,14 +524,39 @@ This project demonstrates several best practices:
 6. **Error Handling**: Comprehensive error handling with proper logging
 7. **Configuration Management**: Type-safe configuration with validation
 8. **Clean Architecture**: Clear separation of concerns across layers
+9. **Session Management**: Proper lifecycle management per MCP spec
+10. **Graceful Shutdown**: Cleanup of all resources on exit
 
-## Testing
+## Troubleshooting
 
-Testing recommendations (infrastructure not included but recommended):
+### Connection Issues
 
-- **Unit Tests**: Test domain models and value objects
-- **Integration Tests**: Test services with mocked HTTP clients
-- **E2E Tests**: Test MCP server with real API calls
+**Problem**: Cannot connect to MCP server
+
+**Solutions**:
+- Check server is running: `curl http://localhost:3000/health`
+- Verify PORT and HOST environment variables
+- Check firewall settings
+- Review server logs for errors
+
+### Authentication Errors
+
+**Problem**: JIRA or GitHub API errors
+
+**Solutions**:
+- Verify API tokens are valid and not expired
+- Check token permissions/scopes
+- For JIRA: Ensure email matches token owner
+- For GitHub: Ensure token has repo and security_events scopes
+
+### Session Issues
+
+**Problem**: "Invalid or missing session ID" errors
+
+**Solutions**:
+- Ensure initialize request is sent first
+- Include `Mcp-Session-Id` header in all requests after initialization
+- Check session hasn't expired (server restart clears sessions)
 
 ## License
 
@@ -324,8 +570,21 @@ Contributions are welcome! Please ensure:
 2. Maintain SOLID principles
 3. Add appropriate error handling
 4. Update documentation
-5. Write tests for new features
+5. TypeScript strict mode compliance
+6. ESLint passing
 
 ## Support
 
-For issues, questions, or contributions, please open an issue in the repository.
+For issues or questions:
+- GitHub Issues: [Create an issue](<repository-url>/issues)
+- Documentation: See ARCHITECTURE.md for detailed design docs
+
+## Changelog
+
+### v1.0.0 (2025-01-05)
+- ✅ Initial release with streamable HTTP transport
+- ✅ 7 MCP tools for engineering metrics
+- ✅ JIRA, GitHub, and GHAS integration
+- ✅ Weekly and quarterly report generation
+- ✅ Session management per MCP spec 2025-03-26
+- ✅ Full TypeScript with DDD architecture
