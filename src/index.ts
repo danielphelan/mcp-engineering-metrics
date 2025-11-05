@@ -90,13 +90,15 @@ async function main() {
     });
 
     // Handle graceful shutdown
-    process.on('SIGINT', () => {
+    process.on('SIGINT', async () => {
       logger.info('Received SIGINT, shutting down gracefully');
+      await mcpServer.cleanup();
       process.exit(0);
     });
 
-    process.on('SIGTERM', () => {
+    process.on('SIGTERM', async () => {
       logger.info('Received SIGTERM, shutting down gracefully');
+      await mcpServer.cleanup();
       process.exit(0);
     });
   } catch (error) {

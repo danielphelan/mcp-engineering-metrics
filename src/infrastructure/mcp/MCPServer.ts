@@ -1,19 +1,19 @@
 /**
  * MCP Server Implementation
  *
- * Main MCP server that exposes engineering metrics tools.
+ * Main MCP server that exposes engineering metrics tools via streamable HTTP transport.
  * Follows Dependency Injection and Single Responsibility Principles.
+ * Implements MCP Specification 2025-03-26 with streamable HTTP transport.
  */
 
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-  Tool,
-} from '@modelcontextprotocol/sdk/types.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
+import { randomUUID } from 'node:crypto';
+import { z } from 'zod';
+
 import { IJiraService } from '../../domain/interfaces/IJiraService.js';
 import { IGitHubService } from '../../domain/interfaces/IGitHubService.js';
 import { ISecurityService } from '../../domain/interfaces/ISecurityService.js';
@@ -21,10 +21,16 @@ import { IReportService } from '../../domain/interfaces/IReportService.js';
 import { ILogger } from '../../domain/interfaces/ILogger.js';
 import { QuarterLabel } from '../../domain/value-objects/QuarterLabel.js';
 import { DateRange } from '../../domain/value-objects/DateRange.js';
-import { z } from 'zod';
+
+/**
+ * Storage for active transports by session ID
+ */
+interface TransportMap {
+  [sessionId: string]: StreamableHTTPServerTransport;
+}
 
 export class MCPServer {
-  private server: Server;
+  private transports: TransportMap = {};
 
   constructor(
     private readonly jiraService: IJiraService,
@@ -32,8 +38,13 @@ export class MCPServer {
     private readonly securityService: ISecurityService,
     private readonly reportService: IReportService,
     private readonly logger: ILogger
-  ) {
-    this.server = new Server(
+  ) {}
+
+  /**
+   * Create and configure MCP server instance with all tools
+   */
+  private createServer(): McpServer {
+    const server = new McpServer(
       {
         name: 'mcp-engineering-metrics',
         version: '1.0.0',
@@ -45,403 +56,156 @@ export class MCPServer {
       }
     );
 
-    this.setupHandlers();
-  }
-
-  private setupHandlers(): void {
-    // List available tools
-    this.server.setRequestHandler(ListToolsRequestSchema, async () => {
-      return {
-        tools: this.getToolDefinitions(),
-      };
-    });
-
-    // Handle tool calls
-    this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      const { name, arguments: args } = request.params;
-
-      try {
-        this.logger.info('Tool called', { tool: name, args });
-
-        switch (name) {
-          case 'get_story_points':
-            return await this.handleGetStoryPoints(args);
-
-          case 'get_pr_metrics':
-            return await this.handleGetPRMetrics(args);
-
-          case 'get_deployment_count':
-            return await this.handleGetDeploymentCount(args);
-
-          case 'get_bug_ratio':
-            return await this.handleGetBugRatio(args);
-
-          case 'get_ghas_metrics':
-            return await this.handleGetGHASMetrics(args);
-
-          case 'generate_weekly_report':
-            return await this.handleGenerateWeeklyReport(args);
-
-          case 'generate_quarterly_summary':
-            return await this.handleGenerateQuarterlySummary(args);
-
-          default:
-            throw new Error(`Unknown tool: ${name}`);
+    // Register tool: get_story_points
+    server.tool(
+      'get_story_points',
+      'Query JIRA for story points with quarterly label. Returns breakdown by status (Done, In Progress, To Do).',
+      {
+        quarter: z.string().describe('Quarter label (e.g., "2025-Q1" or "2025-Q1-PI")'),
+        week_start: z.string().optional().describe('Optional: ISO date for specific week start (YYYY-MM-DD)'),
+        week_end: z.string().optional().describe('Optional: ISO date for specific week end (YYYY-MM-DD)'),
+      },
+      async ({ quarter, week_start, week_end }) => {
+        const quarterLabel = QuarterLabel.fromString(quarter);
+        let period: DateRange | undefined;
+        if (week_start && week_end) {
+          period = DateRange.fromISOStrings(week_start, week_end);
         }
-      } catch (error) {
-        this.logger.error('Tool execution failed', error as Error, { tool: name });
+        const metrics = await this.jiraService.getStoryPoints(quarterLabel, period);
         return {
-          content: [
-            {
-              type: 'text' as const,
-              text: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
-            },
-          ],
+          content: [{ type: 'text', text: JSON.stringify(metrics.toJSON(), null, 2) }],
         };
       }
-    });
-  }
+    );
 
-  private getToolDefinitions(): Tool[] {
-    return [
+    // Register tool: get_pr_metrics
+    server.tool(
+      'get_pr_metrics',
+      'Retrieve GitHub pull request statistics including created count, merged count, and merge rate.',
       {
-        name: 'get_story_points',
-        description: 'Query JIRA for story points with quarterly label. Returns breakdown by status (Done, In Progress, To Do).',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            quarter: {
-              type: 'string',
-              description: 'Quarter label (e.g., "2025-Q1" or "2025-Q1-PI")',
-            },
-            week_start: {
-              type: 'string',
-              description: 'Optional: ISO date for specific week start (YYYY-MM-DD)',
-            },
-            week_end: {
-              type: 'string',
-              description: 'Optional: ISO date for specific week end (YYYY-MM-DD)',
-            },
-          },
-          required: ['quarter'],
-        },
+        start_date: z.string().describe('Start date in ISO format (YYYY-MM-DD)'),
+        end_date: z.string().describe('End date in ISO format (YYYY-MM-DD)'),
+        repositories: z.array(z.string()).optional().describe('Optional: List of repository names to filter'),
       },
+      async ({ start_date, end_date, repositories }) => {
+        const period = DateRange.fromISOStrings(start_date, end_date);
+        const metrics = await this.githubService.getPullRequestMetrics(period, repositories);
+        return {
+          content: [{ type: 'text', text: JSON.stringify(metrics.toJSON(), null, 2) }],
+        };
+      }
+    );
+
+    // Register tool: get_deployment_count
+    server.tool(
+      'get_deployment_count',
+      'Count JIRA releases deployed within a time period. Returns release names, projects, and dates.',
       {
-        name: 'get_pr_metrics',
-        description: 'Retrieve GitHub pull request statistics including created count, merged count, and merge rate.',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            start_date: {
-              type: 'string',
-              description: 'Start date in ISO format (YYYY-MM-DD)',
-            },
-            end_date: {
-              type: 'string',
-              description: 'End date in ISO format (YYYY-MM-DD)',
-            },
-            repositories: {
-              type: 'array',
-              items: { type: 'string' },
-              description: 'Optional: List of repository names to filter',
-            },
-          },
-          required: ['start_date', 'end_date'],
-        },
+        start_date: z.string().describe('Start date in ISO format (YYYY-MM-DD)'),
+        end_date: z.string().describe('End date in ISO format (YYYY-MM-DD)'),
+        projects: z.array(z.string()).optional().describe('Optional: List of JIRA project keys to filter'),
       },
+      async ({ start_date, end_date, projects }) => {
+        const period = DateRange.fromISOStrings(start_date, end_date);
+        const metrics = await this.jiraService.getDeployments(period, projects);
+        return {
+          content: [{ type: 'text', text: JSON.stringify(metrics.toJSON(), null, 2) }],
+        };
+      }
+    );
+
+    // Register tool: get_bug_ratio
+    server.tool(
+      'get_bug_ratio',
+      'Calculate defect rate from JIRA. Counts bugs and defect sub-tasks against total tickets created.',
       {
-        name: 'get_deployment_count',
-        description: 'Count JIRA releases deployed within a time period. Returns release names, projects, and dates.',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            start_date: {
-              type: 'string',
-              description: 'Start date in ISO format (YYYY-MM-DD)',
-            },
-            end_date: {
-              type: 'string',
-              description: 'End date in ISO format (YYYY-MM-DD)',
-            },
-            projects: {
-              type: 'array',
-              items: { type: 'string' },
-              description: 'Optional: List of JIRA project keys to filter',
-            },
-          },
-          required: ['start_date', 'end_date'],
-        },
+        start_date: z.string().describe('Start date in ISO format (YYYY-MM-DD)'),
+        end_date: z.string().describe('End date in ISO format (YYYY-MM-DD)'),
+        projects: z.array(z.string()).optional().describe('Optional: List of JIRA project keys to filter'),
       },
+      async ({ start_date, end_date, projects }) => {
+        const period = DateRange.fromISOStrings(start_date, end_date);
+        const metrics = await this.jiraService.getBugMetrics(period, projects);
+        return {
+          content: [{ type: 'text', text: JSON.stringify(metrics.toJSON(), null, 2) }],
+        };
+      }
+    );
+
+    // Register tool: get_ghas_metrics
+    server.tool(
+      'get_ghas_metrics',
+      'Retrieve GitHub Advanced Security metrics including critical/high vulnerabilities and secrets detected.',
       {
-        name: 'get_bug_ratio',
-        description: 'Calculate defect rate from JIRA. Counts bugs and defect sub-tasks against total tickets created.',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            start_date: {
-              type: 'string',
-              description: 'Start date in ISO format (YYYY-MM-DD)',
-            },
-            end_date: {
-              type: 'string',
-              description: 'End date in ISO format (YYYY-MM-DD)',
-            },
-            projects: {
-              type: 'array',
-              items: { type: 'string' },
-              description: 'Optional: List of JIRA project keys to filter',
-            },
-          },
-          required: ['start_date', 'end_date'],
-        },
+        repositories: z.array(z.string()).optional().describe('Optional: List of repository names to filter'),
+        state: z.enum(['open', 'resolved']).optional().default('open').describe('Filter by alert state (default: "open")'),
       },
+      async ({ repositories, state }) => {
+        const metrics = await this.securityService.getSecurityMetrics(repositories, state);
+        return {
+          content: [{ type: 'text', text: JSON.stringify(metrics.toJSON(), null, 2) }],
+        };
+      }
+    );
+
+    // Register tool: generate_weekly_report
+    server.tool(
+      'generate_weekly_report',
+      'Generate comprehensive markdown report for a week with all metrics and week-over-week comparison.',
       {
-        name: 'get_ghas_metrics',
-        description: 'Retrieve GitHub Advanced Security metrics including critical/high vulnerabilities and secrets detected.',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            repositories: {
-              type: 'array',
-              items: { type: 'string' },
-              description: 'Optional: List of repository names to filter',
-            },
-            state: {
-              type: 'string',
-              enum: ['open', 'resolved'],
-              description: 'Filter by alert state (default: "open")',
-              default: 'open',
-            },
-          },
-        },
+        week_start: z.string().optional().describe('Optional: ISO date for week start (YYYY-MM-DD). Defaults to most recent Monday.'),
+        quarter: z.string().describe('Quarter label (e.g., "2025-Q1" or "2025-Q1-PI")'),
+        repositories: z.array(z.string()).optional().describe('Optional: List of repository names'),
+        jira_projects: z.array(z.string()).optional().describe('Optional: List of JIRA project keys'),
       },
+      async ({ week_start, quarter, repositories, jira_projects }) => {
+        const report = await this.reportService.generateWeeklyReport({
+          weekStart: week_start ? new Date(week_start) : undefined,
+          quarter: QuarterLabel.fromString(quarter),
+          repositories,
+          jiraProjects: jira_projects,
+        });
+        return {
+          content: [{ type: 'text', text: report }],
+        };
+      }
+    );
+
+    // Register tool: generate_quarterly_summary
+    server.tool(
+      'generate_quarterly_summary',
+      'Generate quarter-to-date summary with weekly trend tables showing progress over time.',
       {
-        name: 'generate_weekly_report',
-        description: 'Generate comprehensive markdown report for a week with all metrics and week-over-week comparison.',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            week_start: {
-              type: 'string',
-              description: 'Optional: ISO date for week start (YYYY-MM-DD). Defaults to most recent Monday.',
-            },
-            quarter: {
-              type: 'string',
-              description: 'Quarter label (e.g., "2025-Q1" or "2025-Q1-PI")',
-            },
-            repositories: {
-              type: 'array',
-              items: { type: 'string' },
-              description: 'Optional: List of repository names',
-            },
-            jira_projects: {
-              type: 'array',
-              items: { type: 'string' },
-              description: 'Optional: List of JIRA project keys',
-            },
-          },
-          required: ['quarter'],
-        },
+        quarter: z.string().describe('Quarter label (e.g., "2025-Q1" or "2025-Q1-PI")'),
+        repositories: z.array(z.string()).optional().describe('Optional: List of repository names'),
+        jira_projects: z.array(z.string()).optional().describe('Optional: List of JIRA project keys'),
       },
-      {
-        name: 'generate_quarterly_summary',
-        description: 'Generate quarter-to-date summary with weekly trend tables showing progress over time.',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            quarter: {
-              type: 'string',
-              description: 'Quarter label (e.g., "2025-Q1" or "2025-Q1-PI")',
-            },
-            repositories: {
-              type: 'array',
-              items: { type: 'string' },
-              description: 'Optional: List of repository names',
-            },
-            jira_projects: {
-              type: 'array',
-              items: { type: 'string' },
-              description: 'Optional: List of JIRA project keys',
-            },
-          },
-          required: ['quarter'],
-        },
-      },
-    ];
+      async ({ quarter, repositories, jira_projects }) => {
+        const report = await this.reportService.generateQuarterlyReport({
+          quarter: QuarterLabel.fromString(quarter),
+          repositories,
+          jiraProjects: jira_projects,
+        });
+        return {
+          content: [{ type: 'text', text: report }],
+        };
+      }
+    );
+
+    return server;
   }
 
-  private async handleGetStoryPoints(args: unknown) {
-    const schema = z.object({
-      quarter: z.string(),
-      week_start: z.string().optional(),
-      week_end: z.string().optional(),
-    });
-
-    const { quarter, week_start, week_end } = schema.parse(args);
-    const quarterLabel = QuarterLabel.fromString(quarter);
-
-    let period: DateRange | undefined;
-    if (week_start && week_end) {
-      period = DateRange.fromISOStrings(week_start, week_end);
-    }
-
-    const metrics = await this.jiraService.getStoryPoints(quarterLabel, period);
-
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: JSON.stringify(metrics.toJSON(), null, 2),
-        },
-      ],
-    };
-  }
-
-  private async handleGetPRMetrics(args: unknown) {
-    const schema = z.object({
-      start_date: z.string(),
-      end_date: z.string(),
-      repositories: z.array(z.string()).optional(),
-    });
-
-    const { start_date, end_date, repositories } = schema.parse(args);
-    const period = DateRange.fromISOStrings(start_date, end_date);
-
-    const metrics = await this.githubService.getPullRequestMetrics(period, repositories);
-
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: JSON.stringify(metrics.toJSON(), null, 2),
-        },
-      ],
-    };
-  }
-
-  private async handleGetDeploymentCount(args: unknown) {
-    const schema = z.object({
-      start_date: z.string(),
-      end_date: z.string(),
-      projects: z.array(z.string()).optional(),
-    });
-
-    const { start_date, end_date, projects } = schema.parse(args);
-    const period = DateRange.fromISOStrings(start_date, end_date);
-
-    const metrics = await this.jiraService.getDeployments(period, projects);
-
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: JSON.stringify(metrics.toJSON(), null, 2),
-        },
-      ],
-    };
-  }
-
-  private async handleGetBugRatio(args: unknown) {
-    const schema = z.object({
-      start_date: z.string(),
-      end_date: z.string(),
-      projects: z.array(z.string()).optional(),
-    });
-
-    const { start_date, end_date, projects } = schema.parse(args);
-    const period = DateRange.fromISOStrings(start_date, end_date);
-
-    const metrics = await this.jiraService.getBugMetrics(period, projects);
-
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: JSON.stringify(metrics.toJSON(), null, 2),
-        },
-      ],
-    };
-  }
-
-  private async handleGetGHASMetrics(args: unknown) {
-    const schema = z.object({
-      repositories: z.array(z.string()).optional(),
-      state: z.enum(['open', 'resolved']).optional().default('open'),
-    });
-
-    const { repositories, state } = schema.parse(args);
-
-    const metrics = await this.securityService.getSecurityMetrics(repositories, state);
-
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: JSON.stringify(metrics.toJSON(), null, 2),
-        },
-      ],
-    };
-  }
-
-  private async handleGenerateWeeklyReport(args: unknown) {
-    const schema = z.object({
-      week_start: z.string().optional(),
-      quarter: z.string(),
-      repositories: z.array(z.string()).optional(),
-      jira_projects: z.array(z.string()).optional(),
-    });
-
-    const { week_start, quarter, repositories, jira_projects } = schema.parse(args);
-
-    const report = await this.reportService.generateWeeklyReport({
-      weekStart: week_start ? new Date(week_start) : undefined,
-      quarter: QuarterLabel.fromString(quarter),
-      repositories,
-      jiraProjects: jira_projects,
-    });
-
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: report,
-        },
-      ],
-    };
-  }
-
-  private async handleGenerateQuarterlySummary(args: unknown) {
-    const schema = z.object({
-      quarter: z.string(),
-      repositories: z.array(z.string()).optional(),
-      jira_projects: z.array(z.string()).optional(),
-    });
-
-    const { quarter, repositories, jira_projects } = schema.parse(args);
-
-    const report = await this.reportService.generateQuarterlyReport({
-      quarter: QuarterLabel.fromString(quarter),
-      repositories,
-      jiraProjects: jira_projects,
-    });
-
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: report,
-        },
-      ],
-    };
-  }
-
+  /**
+   * Start the HTTP server with streamable HTTP transport
+   */
   async start(port: number, host: string, corsOrigins?: string[]): Promise<void> {
     const app = express();
 
-    // Configure CORS
+    // Configure CORS with Mcp-Session-Id header exposure
     const corsOptions = {
       origin: corsOrigins && corsOrigins.length > 0 ? corsOrigins : '*',
       credentials: true,
+      exposedHeaders: ['Mcp-Session-Id'],
     };
     app.use(cors(corsOptions));
 
@@ -450,26 +214,126 @@ export class MCPServer {
 
     // Health check endpoint
     app.get('/health', (_req: Request, res: Response) => {
-      res.json({ status: 'healthy', timestamp: new Date().toISOString() });
-    });
-
-    // MCP SSE endpoint
-    app.get('/sse', async (req: Request, res: Response) => {
-      this.logger.info('New SSE connection established');
-
-      const transport = new SSEServerTransport('/message', res);
-      await this.server.connect(transport);
-
-      // Handle client disconnect
-      req.on('close', () => {
-        this.logger.info('SSE connection closed');
+      res.json({
+        status: 'healthy',
+        timestamp: new Date().toISOString(),
+        activeSessions: Object.keys(this.transports).length,
       });
     });
 
-    // MCP message endpoint
-    app.post('/message', async (_req: Request, res: Response) => {
-      // This endpoint is used by the SSE transport to receive messages
-      res.status(200).end();
+    // MCP POST endpoint - handles initialization and regular requests
+    app.post('/mcp', async (req: Request, res: Response) => {
+      const sessionId = req.headers['mcp-session-id'] as string | undefined;
+
+      if (sessionId) {
+        this.logger.debug('Received MCP request for session', { sessionId });
+      }
+
+      try {
+        let transport: StreamableHTTPServerTransport;
+
+        if (sessionId && this.transports[sessionId]) {
+          // Reuse existing transport for this session
+          transport = this.transports[sessionId];
+        } else if (!sessionId && isInitializeRequest(req.body)) {
+          // New initialization request - create new transport with session ID
+          transport = new StreamableHTTPServerTransport({
+            sessionIdGenerator: () => randomUUID(),
+            onsessioninitialized: (newSessionId: string) => {
+              this.logger.info('Session initialized', { sessionId: newSessionId });
+              this.transports[newSessionId] = transport;
+            },
+          });
+
+          // Set up cleanup handler when transport closes
+          transport.onclose = () => {
+            const sid = transport.sessionId;
+            if (sid && this.transports[sid]) {
+              this.logger.info('Transport closed, cleaning up session', { sessionId: sid });
+              delete this.transports[sid];
+            }
+          };
+
+          // Connect the transport to a new server instance
+          const server = this.createServer();
+          await server.connect(transport);
+        } else {
+          // Invalid request
+          res.status(400).json({
+            jsonrpc: '2.0',
+            error: {
+              code: -32000,
+              message: 'Invalid request: missing session ID or not an initialization request',
+            },
+            id: null,
+          });
+          return;
+        }
+
+        // Handle the request with the transport
+        await transport.handleRequest(req, res, req.body);
+      } catch (error) {
+        this.logger.error('Error handling MCP request', error as Error);
+        if (!res.headersSent) {
+          res.status(500).json({
+            jsonrpc: '2.0',
+            error: {
+              code: -32603,
+              message: 'Internal server error',
+            },
+            id: null,
+          });
+        }
+      }
+    });
+
+    // MCP GET endpoint - handles SSE streams for resumability
+    app.get('/mcp', async (req: Request, res: Response) => {
+      const sessionId = req.headers['mcp-session-id'] as string | undefined;
+
+      if (!sessionId || !this.transports[sessionId]) {
+        res.status(400).send('Invalid or missing session ID');
+        return;
+      }
+
+      const lastEventId = req.headers['last-event-id'];
+      if (lastEventId) {
+        this.logger.info('Client reconnecting with Last-Event-ID', { sessionId, lastEventId });
+      } else {
+        this.logger.info('Establishing new SSE stream', { sessionId });
+      }
+
+      try {
+        const transport = this.transports[sessionId];
+        await transport.handleRequest(req, res);
+      } catch (error) {
+        this.logger.error('Error handling SSE stream', error as Error, { sessionId });
+        if (!res.headersSent) {
+          res.status(500).send('Error establishing SSE stream');
+        }
+      }
+    });
+
+    // MCP DELETE endpoint - handles session termination
+    app.delete('/mcp', async (req: Request, res: Response) => {
+      const sessionId = req.headers['mcp-session-id'] as string | undefined;
+
+      if (!sessionId || !this.transports[sessionId]) {
+        res.status(400).send('Invalid or missing session ID');
+        return;
+      }
+
+      this.logger.info('Received session termination request', { sessionId });
+
+      try {
+        const transport = this.transports[sessionId];
+        await transport.handleRequest(req, res);
+      } catch (error) {
+        this.logger.error('Error handling session termination', error as Error, { sessionId });
+        if (!res.headersSent) {
+          res.status(500).send('Error processing session termination');
+        }
+      }
     });
 
     // Error handling middleware
@@ -484,16 +348,34 @@ export class MCPServer {
     // Start HTTP server
     return new Promise((resolve) => {
       app.listen(port, host, () => {
-        this.logger.info('MCP HTTP Server started', {
+        this.logger.info('MCP HTTP Server started with streamable HTTP transport', {
           port,
           host,
           endpoints: {
             health: `http://${host}:${port}/health`,
-            sse: `http://${host}:${port}/sse`,
+            mcp: `http://${host}:${port}/mcp`,
           },
+          specification: '2025-03-26',
         });
         resolve();
       });
     });
+  }
+
+  /**
+   * Clean up all active sessions
+   */
+  async cleanup(): Promise<void> {
+    this.logger.info('Cleaning up MCP server sessions', { count: Object.keys(this.transports).length });
+
+    for (const sessionId in this.transports) {
+      try {
+        this.logger.debug('Closing transport for session', { sessionId });
+        await this.transports[sessionId].close();
+        delete this.transports[sessionId];
+      } catch (error) {
+        this.logger.error('Error closing transport', error as Error, { sessionId });
+      }
+    }
   }
 }
