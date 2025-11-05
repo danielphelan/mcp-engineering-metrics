@@ -12,16 +12,19 @@ import { z } from 'zod';
 config();
 
 const ConfigSchema = z.object({
-  // OpenWeather Configuration
-  openweather: z.object({
-    apiKey: z.string().min(1, 'OpenWeather API key is required'),
-    baseUrl: z.string().url().default('https://api.openweathermap.org/data/2.5'),
+  // JIRA Configuration
+  jira: z.object({
+    url: z.string().url('JIRA URL must be a valid URL'),
+    email: z.string().email('JIRA email must be valid'),
+    apiToken: z.string().min(1, 'JIRA API token is required'),
+    projects: z.string().optional(), // Comma-separated list
   }),
 
-  // Maritime Configuration
-  maritime: z.object({
-    apiKey: z.string().min(1, 'Maritime API key is required'),
-    baseUrl: z.string().url().default('https://www.aishub.net/api'),
+  // GitHub Configuration
+  github: z.object({
+    token: z.string().min(1, 'GitHub token is required'),
+    org: z.string().min(1, 'GitHub organization is required'),
+    repos: z.string().optional(), // Comma-separated list
   }),
 
   // Server Configuration
@@ -40,13 +43,16 @@ export class Config {
     if (!this.instance) {
       try {
         this.instance = ConfigSchema.parse({
-          openweather: {
-            apiKey: process.env.OPENWEATHER_API_KEY,
-            baseUrl: process.env.OPENWEATHER_BASE_URL,
+          jira: {
+            url: process.env.JIRA_URL,
+            email: process.env.JIRA_EMAIL,
+            apiToken: process.env.JIRA_API_TOKEN,
+            projects: process.env.JIRA_PROJECTS,
           },
-          maritime: {
-            apiKey: process.env.MARITIME_API_KEY,
-            baseUrl: process.env.MARITIME_BASE_URL,
+          github: {
+            token: process.env.GITHUB_TOKEN,
+            org: process.env.GITHUB_ORG,
+            repos: process.env.GITHUB_REPOS,
           },
           server: {
             nodeEnv: process.env.NODE_ENV,

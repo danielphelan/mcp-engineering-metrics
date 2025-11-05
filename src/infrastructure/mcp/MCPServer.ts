@@ -1,7 +1,7 @@
 /**
  * MCP Server Implementation
  *
- * Main MCP server that exposes weather and maritime tools.
+ * Main MCP server that exposes engineering metrics tools.
  * Follows Dependency Injection and Single Responsibility Principles.
  */
 
@@ -12,19 +12,23 @@ import {
   ListToolsRequestSchema,
   Tool,
 } from '@modelcontextprotocol/sdk/types.js';
-import { IWeatherService } from '../../domain/interfaces/IWeatherService.js';
-import { IMaritimeService } from '../../domain/interfaces/IMaritimeService.js';
+import { IJiraService } from '../../domain/interfaces/IJiraService.js';
+import { IGitHubService } from '../../domain/interfaces/IGitHubService.js';
+import { ISecurityService } from '../../domain/interfaces/ISecurityService.js';
+import { IReportService } from '../../domain/interfaces/IReportService.js';
 import { ILogger } from '../../domain/interfaces/ILogger.js';
-import { Coordinates } from '../../domain/value-objects/Coordinates.js';
-import { BoundingBox } from '../../domain/value-objects/BoundingBox.js';
+import { QuarterLabel } from '../../domain/value-objects/QuarterLabel.js';
+import { DateRange } from '../../domain/value-objects/DateRange.js';
 import { z } from 'zod';
 
 export class MCPServer {
   private server: Server;
 
   constructor(
-    private readonly weatherService: IWeatherService,
-    private readonly maritimeService: IMaritimeService,
+    private readonly jiraService: IJiraService,
+    private readonly githubService: IGitHubService,
+    private readonly securityService: ISecurityService,
+    private readonly reportService: IReportService,
     private readonly logger: ILogger
   ) {
     this.server = new Server(
@@ -58,20 +62,26 @@ export class MCPServer {
         this.logger.info('Tool called', { tool: name, args });
 
         switch (name) {
-          case 'get_current_weather':
-            return await this.handleGetCurrentWeather(args);
+          case 'get_story_points':
+            return await this.handleGetStoryPoints(args);
 
-          case 'get_weather_forecast':
-            return await this.handleGetWeatherForecast(args);
+          case 'get_pr_metrics':
+            return await this.handleGetPRMetrics(args);
 
-          case 'get_vessel_by_mmsi':
-            return await this.handleGetVesselByMMSI(args);
+          case 'get_deployment_count':
+            return await this.handleGetDeploymentCount(args);
 
-          case 'get_vessels_in_area':
-            return await this.handleGetVesselsInArea(args);
+          case 'get_bug_ratio':
+            return await this.handleGetBugRatio(args);
 
-          case 'get_vessels_nearby':
-            return await this.handleGetVesselsNearby(args);
+          case 'get_ghas_metrics':
+            return await this.handleGetGHASMetrics(args);
+
+          case 'generate_weekly_report':
+            return await this.handleGenerateWeeklyReport(args);
+
+          case 'generate_quarterly_summary':
+            return await this.handleGenerateQuarterlySummary(args);
 
           default:
             throw new Error(`Unknown tool: ${name}`);
@@ -93,242 +103,334 @@ export class MCPServer {
   private getToolDefinitions(): Tool[] {
     return [
       {
-        name: 'get_current_weather',
-        description: 'Get current weather data for a specific location. You can provide either a city name or coordinates (latitude, longitude).',
+        name: 'get_story_points',
+        description: 'Query JIRA for story points with quarterly label. Returns breakdown by status (Done, In Progress, To Do).',
         inputSchema: {
           type: 'object',
           properties: {
-            location: {
+            quarter: {
               type: 'string',
-              description: 'City name (e.g., "London", "New York") or coordinates in format "lat,lon" (e.g., "51.5074,-0.1278")',
+              description: 'Quarter label (e.g., "2025-Q1" or "2025-Q1-PI")',
             },
-          },
-          required: ['location'],
-        },
-      },
-      {
-        name: 'get_weather_forecast',
-        description: 'Get weather forecast for a specific location. Provides forecast data for the specified number of days.',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            location: {
+            week_start: {
               type: 'string',
-              description: 'City name or coordinates in format "lat,lon"',
+              description: 'Optional: ISO date for specific week start (YYYY-MM-DD)',
             },
-            days: {
-              type: 'number',
-              description: 'Number of days to forecast (default: 5, max: 5)',
-              default: 5,
-            },
-          },
-          required: ['location'],
-        },
-      },
-      {
-        name: 'get_vessel_by_mmsi',
-        description: 'Get detailed information about a specific maritime vessel using its MMSI (Maritime Mobile Service Identity) number.',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            mmsi: {
+            week_end: {
               type: 'string',
-              description: 'The 9-digit MMSI number of the vessel',
+              description: 'Optional: ISO date for specific week end (YYYY-MM-DD)',
             },
           },
-          required: ['mmsi'],
+          required: ['quarter'],
         },
       },
       {
-        name: 'get_vessels_in_area',
-        description: 'Get all vessels within a specific geographic area defined by a bounding box.',
+        name: 'get_pr_metrics',
+        description: 'Retrieve GitHub pull request statistics including created count, merged count, and merge rate.',
         inputSchema: {
           type: 'object',
           properties: {
-            northLat: {
-              type: 'number',
-              description: 'Northern boundary latitude (-90 to 90)',
+            start_date: {
+              type: 'string',
+              description: 'Start date in ISO format (YYYY-MM-DD)',
             },
-            westLon: {
-              type: 'number',
-              description: 'Western boundary longitude (-180 to 180)',
+            end_date: {
+              type: 'string',
+              description: 'End date in ISO format (YYYY-MM-DD)',
             },
-            southLat: {
-              type: 'number',
-              description: 'Southern boundary latitude (-90 to 90)',
-            },
-            eastLon: {
-              type: 'number',
-              description: 'Eastern boundary longitude (-180 to 180)',
+            repositories: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Optional: List of repository names to filter',
             },
           },
-          required: ['northLat', 'westLon', 'southLat', 'eastLon'],
+          required: ['start_date', 'end_date'],
         },
       },
       {
-        name: 'get_vessels_nearby',
-        description: 'Get vessels near a specific location within a given radius.',
+        name: 'get_deployment_count',
+        description: 'Count JIRA releases deployed within a time period. Returns release names, projects, and dates.',
         inputSchema: {
           type: 'object',
           properties: {
-            latitude: {
-              type: 'number',
-              description: 'Center point latitude (-90 to 90)',
+            start_date: {
+              type: 'string',
+              description: 'Start date in ISO format (YYYY-MM-DD)',
             },
-            longitude: {
-              type: 'number',
-              description: 'Center point longitude (-180 to 180)',
+            end_date: {
+              type: 'string',
+              description: 'End date in ISO format (YYYY-MM-DD)',
             },
-            radiusKm: {
-              type: 'number',
-              description: 'Search radius in kilometers',
+            projects: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Optional: List of JIRA project keys to filter',
             },
           },
-          required: ['latitude', 'longitude', 'radiusKm'],
+          required: ['start_date', 'end_date'],
+        },
+      },
+      {
+        name: 'get_bug_ratio',
+        description: 'Calculate defect rate from JIRA. Counts bugs and defect sub-tasks against total tickets created.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            start_date: {
+              type: 'string',
+              description: 'Start date in ISO format (YYYY-MM-DD)',
+            },
+            end_date: {
+              type: 'string',
+              description: 'End date in ISO format (YYYY-MM-DD)',
+            },
+            projects: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Optional: List of JIRA project keys to filter',
+            },
+          },
+          required: ['start_date', 'end_date'],
+        },
+      },
+      {
+        name: 'get_ghas_metrics',
+        description: 'Retrieve GitHub Advanced Security metrics including critical/high vulnerabilities and secrets detected.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            repositories: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Optional: List of repository names to filter',
+            },
+            state: {
+              type: 'string',
+              enum: ['open', 'resolved'],
+              description: 'Filter by alert state (default: "open")',
+              default: 'open',
+            },
+          },
+        },
+      },
+      {
+        name: 'generate_weekly_report',
+        description: 'Generate comprehensive markdown report for a week with all metrics and week-over-week comparison.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            week_start: {
+              type: 'string',
+              description: 'Optional: ISO date for week start (YYYY-MM-DD). Defaults to most recent Monday.',
+            },
+            quarter: {
+              type: 'string',
+              description: 'Quarter label (e.g., "2025-Q1" or "2025-Q1-PI")',
+            },
+            repositories: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Optional: List of repository names',
+            },
+            jira_projects: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Optional: List of JIRA project keys',
+            },
+          },
+          required: ['quarter'],
+        },
+      },
+      {
+        name: 'generate_quarterly_summary',
+        description: 'Generate quarter-to-date summary with weekly trend tables showing progress over time.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            quarter: {
+              type: 'string',
+              description: 'Quarter label (e.g., "2025-Q1" or "2025-Q1-PI")',
+            },
+            repositories: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Optional: List of repository names',
+            },
+            jira_projects: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Optional: List of JIRA project keys',
+            },
+          },
+          required: ['quarter'],
         },
       },
     ];
   }
 
-  private async handleGetCurrentWeather(args: unknown) {
+  private async handleGetStoryPoints(args: unknown) {
     const schema = z.object({
-      location: z.string(),
+      quarter: z.string(),
+      week_start: z.string().optional(),
+      week_end: z.string().optional(),
     });
 
-    const { location } = schema.parse(args);
-    const parsedLocation = this.parseLocation(location);
-    const weather = await this.weatherService.getCurrentWeather(parsedLocation);
+    const { quarter, week_start, week_end } = schema.parse(args);
+    const quarterLabel = QuarterLabel.fromString(quarter);
 
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: JSON.stringify(weather.toJSON(), null, 2),
-        },
-      ],
-    };
-  }
-
-  private async handleGetWeatherForecast(args: unknown) {
-    const schema = z.object({
-      location: z.string(),
-      days: z.number().optional().default(5),
-    });
-
-    const { location, days } = schema.parse(args);
-    const parsedLocation = this.parseLocation(location);
-    const forecast = await this.weatherService.getForecast(parsedLocation, days);
-
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: JSON.stringify(forecast.map((w) => w.toJSON()), null, 2),
-        },
-      ],
-    };
-  }
-
-  private async handleGetVesselByMMSI(args: unknown) {
-    const schema = z.object({
-      mmsi: z.string(),
-    });
-
-    const { mmsi } = schema.parse(args);
-    const vessel = await this.maritimeService.getVesselByMMSI(mmsi);
-
-    if (!vessel) {
-      return {
-        content: [
-          {
-            type: 'text' as const,
-            text: `No vessel found with MMSI: ${mmsi}`,
-          },
-        ],
-      };
+    let period: DateRange | undefined;
+    if (week_start && week_end) {
+      period = DateRange.fromISOStrings(week_start, week_end);
     }
 
+    const metrics = await this.jiraService.getStoryPoints(quarterLabel, period);
+
     return {
       content: [
         {
           type: 'text' as const,
-          text: JSON.stringify(vessel.toJSON(), null, 2),
+          text: JSON.stringify(metrics.toJSON(), null, 2),
         },
       ],
     };
   }
 
-  private async handleGetVesselsInArea(args: unknown) {
+  private async handleGetPRMetrics(args: unknown) {
     const schema = z.object({
-      northLat: z.number(),
-      westLon: z.number(),
-      southLat: z.number(),
-      eastLon: z.number(),
+      start_date: z.string(),
+      end_date: z.string(),
+      repositories: z.array(z.string()).optional(),
     });
 
-    const { northLat, westLon, southLat, eastLon } = schema.parse(args);
-    const boundingBox = BoundingBox.fromCoordinates(northLat, westLon, southLat, eastLon);
-    const vessels = await this.maritimeService.getVesselsInArea(boundingBox);
+    const { start_date, end_date, repositories } = schema.parse(args);
+    const period = DateRange.fromISOStrings(start_date, end_date);
+
+    const metrics = await this.githubService.getPullRequestMetrics(period, repositories);
 
     return {
       content: [
         {
           type: 'text' as const,
-          text: JSON.stringify(
-            {
-              count: vessels.length,
-              vessels: vessels.map((v) => v.toJSON()),
-            },
-            null,
-            2
-          ),
+          text: JSON.stringify(metrics.toJSON(), null, 2),
         },
       ],
     };
   }
 
-  private async handleGetVesselsNearby(args: unknown) {
+  private async handleGetDeploymentCount(args: unknown) {
     const schema = z.object({
-      latitude: z.number(),
-      longitude: z.number(),
-      radiusKm: z.number(),
+      start_date: z.string(),
+      end_date: z.string(),
+      projects: z.array(z.string()).optional(),
     });
 
-    const { latitude, longitude, radiusKm } = schema.parse(args);
-    const coordinates = Coordinates.create(latitude, longitude);
-    const vessels = await this.maritimeService.getVesselsNearby(coordinates, radiusKm);
+    const { start_date, end_date, projects } = schema.parse(args);
+    const period = DateRange.fromISOStrings(start_date, end_date);
+
+    const metrics = await this.jiraService.getDeployments(period, projects);
 
     return {
       content: [
         {
           type: 'text' as const,
-          text: JSON.stringify(
-            {
-              count: vessels.length,
-              searchCenter: coordinates.toJSON(),
-              radiusKm,
-              vessels: vessels.map((v) => v.toJSON()),
-            },
-            null,
-            2
-          ),
+          text: JSON.stringify(metrics.toJSON(), null, 2),
         },
       ],
     };
   }
 
-  private parseLocation(location: string): string | Coordinates {
-    // Check if location is in "lat,lon" format
-    const coordPattern = /^(-?\d+\.?\d*),\s*(-?\d+\.?\d*)$/;
-    const match = location.match(coordPattern);
+  private async handleGetBugRatio(args: unknown) {
+    const schema = z.object({
+      start_date: z.string(),
+      end_date: z.string(),
+      projects: z.array(z.string()).optional(),
+    });
 
-    if (match) {
-      const lat = parseFloat(match[1]);
-      const lon = parseFloat(match[2]);
-      return Coordinates.create(lat, lon);
-    }
+    const { start_date, end_date, projects } = schema.parse(args);
+    const period = DateRange.fromISOStrings(start_date, end_date);
 
-    return location;
+    const metrics = await this.jiraService.getBugMetrics(period, projects);
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: JSON.stringify(metrics.toJSON(), null, 2),
+        },
+      ],
+    };
+  }
+
+  private async handleGetGHASMetrics(args: unknown) {
+    const schema = z.object({
+      repositories: z.array(z.string()).optional(),
+      state: z.enum(['open', 'resolved']).optional().default('open'),
+    });
+
+    const { repositories, state } = schema.parse(args);
+
+    const metrics = await this.securityService.getSecurityMetrics(repositories, state);
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: JSON.stringify(metrics.toJSON(), null, 2),
+        },
+      ],
+    };
+  }
+
+  private async handleGenerateWeeklyReport(args: unknown) {
+    const schema = z.object({
+      week_start: z.string().optional(),
+      quarter: z.string(),
+      repositories: z.array(z.string()).optional(),
+      jira_projects: z.array(z.string()).optional(),
+    });
+
+    const { week_start, quarter, repositories, jira_projects } = schema.parse(args);
+
+    const report = await this.reportService.generateWeeklyReport({
+      weekStart: week_start ? new Date(week_start) : undefined,
+      quarter: QuarterLabel.fromString(quarter),
+      repositories,
+      jiraProjects: jira_projects,
+    });
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: report,
+        },
+      ],
+    };
+  }
+
+  private async handleGenerateQuarterlySummary(args: unknown) {
+    const schema = z.object({
+      quarter: z.string(),
+      repositories: z.array(z.string()).optional(),
+      jira_projects: z.array(z.string()).optional(),
+    });
+
+    const { quarter, repositories, jira_projects } = schema.parse(args);
+
+    const report = await this.reportService.generateQuarterlyReport({
+      quarter: QuarterLabel.fromString(quarter),
+      repositories,
+      jiraProjects: jira_projects,
+    });
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: report,
+        },
+      ],
+    };
   }
 
   async start(): Promise<void> {

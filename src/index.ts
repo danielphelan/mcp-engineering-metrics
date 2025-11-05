@@ -8,8 +8,10 @@
  */
 
 import { MCPServer } from './infrastructure/mcp/MCPServer.js';
-import { OpenWeatherService } from './application/services/OpenWeatherService.js';
-import { MaritimeService } from './application/services/MaritimeService.js';
+import { JiraService } from './application/services/JiraService.js';
+import { GitHubService } from './application/services/GitHubService.js';
+import { SecurityService } from './application/services/SecurityService.js';
+import { ReportService } from './application/services/ReportService.js';
 import { AxiosHttpClient } from './infrastructure/http/AxiosHttpClient.js';
 import { ConsoleLogger } from './infrastructure/http/ConsoleLogger.js';
 import { Config } from './infrastructure/config/Config.js';
@@ -28,34 +30,52 @@ async function main() {
       environment: config.server.nodeEnv,
     });
 
-    // Create HTTP clients for each service
-    const weatherHttpClient = new AxiosHttpClient(
-      logger,
-      config.openweather.baseUrl,
-      10000
-    );
+    // Create HTTP client for JIRA
+    const jiraHttpClient = new AxiosHttpClient(logger, config.jira.url, 15000);
 
-    const maritimeHttpClient = new AxiosHttpClient(
-      logger,
-      config.maritime.baseUrl,
-      15000
-    );
+    // Parse optional configuration lists
+    const jiraProjects = config.jira.projects?.split(',').map((p) => p.trim());
+    const githubRepos = config.github.repos?.split(',').map((r) => r.trim());
 
     // Create service instances
-    const weatherService = new OpenWeatherService(
-      weatherHttpClient,
+    const jiraService = new JiraService(
+      jiraHttpClient,
       logger,
-      config.openweather.apiKey
+      config.jira.url,
+      config.jira.email,
+      config.jira.apiToken,
+      jiraProjects
     );
 
-    const maritimeService = new MaritimeService(
-      maritimeHttpClient,
+    const githubService = new GitHubService(
       logger,
-      config.maritime.apiKey
+      config.github.org,
+      config.github.token,
+      githubRepos
+    );
+
+    const securityService = new SecurityService(
+      logger,
+      config.github.org,
+      config.github.token,
+      githubRepos
+    );
+
+    const reportService = new ReportService(
+      jiraService,
+      githubService,
+      securityService,
+      logger
     );
 
     // Create and start MCP server
-    const mcpServer = new MCPServer(weatherService, maritimeService, logger);
+    const mcpServer = new MCPServer(
+      jiraService,
+      githubService,
+      securityService,
+      reportService,
+      logger
+    );
     await mcpServer.start();
 
     logger.info('MCP Server is ready to accept requests');

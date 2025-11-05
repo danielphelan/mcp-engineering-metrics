@@ -1,7 +1,7 @@
 {
   "name": "mcp-engineering-metrics",
   "version": "1.0.0",
-  "description": "MCP Server with OpenWeather and Maritime Vessels Tracking capabilities",
+  "description": "MCP Server for aggregating engineering metrics from JIRA, GitHub, and GitHub Advanced Security",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
@@ -17,14 +17,17 @@
   "keywords": [
     "mcp",
     "model-context-protocol",
-    "openweather",
-    "maritime",
-    "vessels"
+    "jira",
+    "github",
+    "engineering-metrics",
+    "security",
+    "devops"
   ],
   "author": "",
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
+    "@octokit/rest": "^21.0.2",
     "axios": "^1.7.9",
     "dotenv": "^16.4.5",
     "zod": "^3.23.8"
